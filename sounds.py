@@ -24,7 +24,7 @@ DEFAULT_OPTIONS = {
     "throttling_count": 5
 }
 
-PLAY_REGEX = re.compile("play\s([a-z0-9_' -]+)", re.IGNORECASE)
+PLAY_REGEX = re.compile("play\s([a-z0-9_'’ -]+)", re.IGNORECASE)
 REMOVE_REGEX = re.compile("remove\s([a-z0-9_' -]+)", re.IGNORECASE)
 UPDATE_CONF_REGEX = re.compile("^set ([A-Z0-9_]+) to ([A-Z0-9_]+)$", re.IGNORECASE)
 SHOW_CONF_REGEX = re.compile("^show conf$", re.IGNORECASE)
