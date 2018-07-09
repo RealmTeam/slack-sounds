@@ -7,7 +7,7 @@ from distutils.util import strtobool
 import os
 import re
 import json
-import urllib
+import urllib2
 
 from slackclient import SlackClient
 
@@ -15,7 +15,7 @@ BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 SOUNDS_DIR = os.path.join(BASE_DIR, 'sounds')
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 
-PLAYER = 'afplay'
+PLAYER = 'mpg123'
 FILETYPE = 'mp3'
 DEFAULT_OPTIONS = {
     "_token": None,
@@ -158,9 +158,9 @@ ACTIONS = {
     LIST_SOUNDS_REGEX: list_sounds_action,
 }
 
-def add_sound(file_id):
+def add_sound(file_id, config):
     info = sc.api_call("files.info", file=file_id)
-    file_url = info.get("file").get("url_private_download") if info["ok"] else ''
+    file_url = info.get("file").get("url_private") if info["ok"] else ''
     filename = info.get("file").get("title") if info["ok"] else ''
     if filename.endswith('.mp3') and file_url.endswith('.mp3'):
         folder = 'misc'
@@ -170,7 +170,9 @@ def add_sound(file_id):
             os.makedirs(os.path.join(SOUNDS_DIR, folder.strip()))
         except OSError:
             pass
-        urllib.urlretrieve(file_url, os.path.join(SOUNDS_DIR, folder.strip(), filename.strip()))
+        req = urllib2.Request(file_url, headers={"Authorization": "Bearer " + config["_token"]})
+        with open(os.path.join(SOUNDS_DIR, folder.strip(), filename.strip()), 'w+') as f:
+            f.write(urllib2.urlopen(req).read())
 
 
 def load_users():
@@ -216,7 +218,7 @@ if __name__ == '__main__':
                 elif event_type == 'file_created' or event_type == 'file_shared':
                     file_id = event.get('file', {}).get('id', None)
                     if file_id:
-                        add_sound(file_id)
+                        add_sound(file_id, config)
             time.sleep(1);
     else:
         print 'Connection failed, invalid token?'
