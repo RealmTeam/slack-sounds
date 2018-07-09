@@ -1,0 +1,4 @@
+*.pyc
+sounds/*
+.DS_Store
+config.json
