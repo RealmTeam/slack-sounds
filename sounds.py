@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-
+# -*- coding: utf-8 -*-
 import time
 import subprocess
 from datetime import datetime
@@ -24,8 +24,8 @@ DEFAULT_OPTIONS = {
     "throttling_count": 5
 }
 
-PLAY_REGEX = re.compile("play\s([a-z0-9_'’ -]+)", re.IGNORECASE)
-REMOVE_REGEX = re.compile("remove\s([a-z0-9_' -]+)", re.IGNORECASE)
+PLAY_REGEX = re.compile(u"play\s([a-z0-9_'’ -]+)", re.IGNORECASE)
+REMOVE_REGEX = re.compile(u"remove\s([a-z0-9_'’ -]+)", re.IGNORECASE)
 UPDATE_CONF_REGEX = re.compile("^set ([A-Z0-9_]+) to ([A-Z0-9_]+)$", re.IGNORECASE)
 SHOW_CONF_REGEX = re.compile("^show conf$", re.IGNORECASE)
 LIST_SOUNDS_REGEX = re.compile("list\ssounds", re.IGNORECASE)
@@ -56,7 +56,7 @@ def find_sound(sound_name):
 
 
 def play_action(match, user, config):
-    sound_name = match.group(1).strip()
+    sound_name = match.group(1).strip().replace(u"’", "'")
     sound_file = find_sound(sound_name)
 
     def throttle():
@@ -91,7 +91,7 @@ def play_action(match, user, config):
 def remove_action(match, user, config):
     if not user["is_admin"]:
         return
-    sound_name = match.group(1).strip()
+    sound_name = match.group(1).strip().replace(u"’", "'")
     sound_file = find_sound(sound_name)
     if sound_file:
         os.remove(sound_file)
