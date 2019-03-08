@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import time
+import traceback
 import subprocess
+import string
 from datetime import datetime
 from distutils.util import strtobool
 import os
@@ -14,23 +16,43 @@ from slackclient import SlackClient
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 SOUNDS_DIR = os.path.join(BASE_DIR, 'sounds')
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
-
+LOGGING_FILE = os.path.join(BASE_DIR, 'commands.log')
+VALID_CHARS = string.ascii_letters + string.digits + " .'_-"
+FOLDER_SEP = ':/|'
 PLAYER = 'mpg123'
 FILETYPE = 'mp3'
+EQUALIZER = ['mp3gain', '-r']
+PAD_SILENCE = ['sox', 'in.mp3', 'out.mp3', 'pad', '0.5', '0']
+TRIM = ['sox', 'in.mp3', 'out.mp3', 'trim', 'from', 'to']
+FADE = ['sox', 'in.mp3', 'out.mp3', 'fade', '0', '-0', '2']
+YOUTUBE_DOWNLOAD = ['youtube-dl', '--extract-audio', '--audio-format', 'mp3', 'url', '-o', '{}.%(ext)s']
+
 DEFAULT_OPTIONS = {
     "_token": None,
     "throttling": True,
     "throttling_reset": 10 * 60,
-    "throttling_count": 5
+    "throttling_count": 5,
+    "default_ban_length": 30,
 }
 
-PLAY_REGEX = re.compile(u"play\s([a-z0-9_'’ -]+)", re.IGNORECASE)
-REMOVE_REGEX = re.compile(u"remove\s([a-z0-9_'’ -]+)", re.IGNORECASE)
-UPDATE_CONF_REGEX = re.compile("^set ([A-Z0-9_]+) to ([A-Z0-9_]+)$", re.IGNORECASE)
-SHOW_CONF_REGEX = re.compile("^show conf$", re.IGNORECASE)
+PLAY_REGEX = re.compile(u"play\s([a-z0-9_' ]+)", re.IGNORECASE)
+REMOVE_REGEX = re.compile(u"remove\s([a-z0-9_' ]+)", re.IGNORECASE)
+UPDATE_CONF_REGEX = re.compile("^set\s([A-Z0-9_]+)\sto\s([A-Z0-9_]+)$", re.IGNORECASE)
+SHOW_CONF_REGEX = re.compile("^show\sconf$", re.IGNORECASE)
 LIST_SOUNDS_REGEX = re.compile("list\ssounds", re.IGNORECASE)
+PUNISH_USER_REGEX = re.compile("punish\s<?@([A-Z0-9_-]+)>?\s?(\d+)?", re.IGNORECASE)
+HELP_REGEX = re.compile("^help$", re.IGNORECASE)
+SHOW_LOGS_REGEX = re.compile("^show\slogs$", re.IGNORECASE)
+TRIM_REGEX = re.compile("^trim\s([a-z0-9_' ]+)\s([\d\.]+)\s([\d\.]+)$", re.IGNORECASE)
+FADE_OUT_REGEX = re.compile("^fade\s([a-z0-9_' ]+)$", re.IGNORECASE)
+YOUTUBE_REGEX = re.compile("^download\s<?(https?://[^\s/$.?#].[^\s]*)>?\s([a-z0-9_' :/|]+)$", re.IGNORECASE)
+PAD_REGEX = re.compile("^pad\s([a-z0-9_' ]+)$", re.IGNORECASE)
 
 
+users = {}
+throttling_record = {}
+punished = {}
+logs = []
 
 def load_config():
     config = {}
@@ -56,7 +78,7 @@ def find_sound(sound_name):
 
 
 def play_action(match, user, config):
-    sound_name = match.group(1).strip().replace(u"’", "'")
+    sound_name = match.group(1).strip()
     sound_file = find_sound(sound_name)
 
     def throttle():
@@ -71,16 +93,28 @@ def play_action(match, user, config):
         throttling_record[user["name"]] = record
         return record["count"] > config["throttling_count"], record
 
+    def check_punished():
+        if user["is_admin"]:
+            return False
+        release = punished.get(user["name"], time.time())
+        if release > time.time():
+            return release
+        return False
+
     if sound_file:
         throttled, record = throttle()
+        punished_release = check_punished()
         if throttled:
             message = 'You reached your throttling limit. Try again later.'
+        elif punished_release:
+            message = 'You have been punished ! No sounds until {}.'.format(datetime.fromtimestamp(punished_release).strftime('%H:%M:%S'))
         else:
+            logs.append((user, sound_name, time.time()))
             message = 'Playing ' + sound_name
             subprocess.Popen([PLAYER, "{}".format(sound_file)])
         if record:
             message += '\n {} plays left. Reset at {}.'.format(
-                config["throttling_count"] - record["count"],
+                max(config["throttling_count"] - record["count"], 0),
                 datetime.fromtimestamp(record["time"] + config["throttling_reset"]).strftime('%H:%M:%S')
             )
     else:
@@ -91,7 +125,7 @@ def play_action(match, user, config):
 def remove_action(match, user, config):
     if not user["is_admin"]:
         return
-    sound_name = match.group(1).strip().replace(u"’", "'")
+    sound_name = match.group(1).strip()
     sound_file = find_sound(sound_name)
     if sound_file:
         os.remove(sound_file)
@@ -99,6 +133,11 @@ def remove_action(match, user, config):
     else:
         message = 'No sound matching ' + sound_name
     return message
+
+
+def show_logs_action(match, user, config):
+    return '\n'.join(['{} played {} at {}'.format(l[0]['name'], l[1], datetime.fromtimestamp(l[2]).strftime('%H:%M:%S'))
+                      for l in logs[-10:]])
 
 
 def list_sounds_action(match, user, config):
@@ -131,6 +170,34 @@ def show_conf_action(match, user, config):
     return message
 
 
+def show_help_action(match, user, config):
+    message = """
+Welcome to sounds, the bot that brings fun to your team.
+To interact with the bot, simply use these commands:
+    list sounds: shows the full list of all the sounds available
+    play replace_with_sound: plays the sound you chose from the list
+    show logs: shows a list who played the last 10 sounds
+    pad replace_with_sound: adds 0.5s at the beginning of the sound
+    trim replace_with_sound 2.5 10: trim the selected sound to be only between 2.5 and 10 seconds
+    fade replace_with_sound: adds a 1s fadeout on your sound
+    download replace_with_youtube_url replace_with_sound: downloads a sound from youtube
+    help: shows this help"""
+    if user["is_admin"]:
+        message += """
+    remove sound_name: removes the sound from the list
+    show conf: show the config variables
+    set x to y: updates the x config variable with y value
+    punish @user 30: prevent user from playing a sound for 30 minutes"""
+    message += """
+How to upload a sound ?
+In the bot channel, upload your mp3 file. This file should already be cut properly and have 0.5s of silence at the beginning.
+You can use various websites like sonyoutube.com to convert a youtube video to an mp3 file and then use a software like audacity or a website like audiotrimmer.com to edit it.
+Be sure you filename ends with .mp3 and if you want to put your file in a specific folder separate the folder from the filename like so folder:filename.mp3
+
+That's it with the instructions, have fun !"""
+    return message
+
+
 def update_conf_action(match, user, config):
     if not user["is_admin"]:
         return
@@ -150,56 +217,167 @@ def update_conf_action(match, user, config):
     return "Config set"
 
 
-ACTIONS = {
-    PLAY_REGEX: play_action,
-    REMOVE_REGEX: remove_action,
-    UPDATE_CONF_REGEX: update_conf_action,
-    SHOW_CONF_REGEX: show_conf_action,
-    LIST_SOUNDS_REGEX: list_sounds_action,
-}
+def punish_user_action(match, user, config):
+    if not user["is_admin"]:
+        return
+    who = match.group(1)
+    r = users[who]
+    if r:
+        who = r
+    else:
+        return "Couldn't find user {}".format(user)
+    try:
+        how_long = int(match.group(2) or config.get('default_ban_length'))
+    except ValueError:
+        how_long = 30
+    punished[who["name"]] = time.time() + how_long * 60
+    return "{} has been punished for {} minutes.".format(who["name"], how_long)
 
-def add_sound(file_id, config):
+
+def trim_action(match, user, config):
+    sound_name = match.group(1).strip()
+    sound_file = find_sound(sound_name)
+    tmp_file = '__NEW__' + os.path.basename(sound_file)
+    if sound_file:
+        trim_command = list(TRIM)
+        trim_command[1] = sound_file
+        trim_command[2] = tmp_file
+        trim_command[4] = match.group(2)
+        trim_command[5] = '=' + match.group(3)
+        process = subprocess.Popen(trim_command)
+        process.wait()
+        os.rename(tmp_file, sound_file)
+        message = 'Trimmed ' + sound_name
+    else:
+        message = 'No sound matching ' + sound_name
+    return message
+
+
+def pad_action(match, user, config):
+    sound_name = match.group(1).strip()
+    sound_file = find_sound(sound_name)
+    tmp_file = '__NEW__' + os.path.basename(sound_file)
+    if sound_file:
+        pad_command = list(PAD_SILENCE)
+        pad_command[1] = sound_file
+        pad_command[2] = tmp_file
+        process = subprocess.Popen(pad_command)
+        process.wait()
+        os.rename(tmp_file, sound_file)
+        message = 'Padded ' + sound_name
+    else:
+        message = 'No sound matching ' + sound_name
+    return message
+
+
+def fade_out_action(match, user, config):
+    sound_name = match.group(1).strip()
+    sound_file = find_sound(sound_name)
+    tmp_file = '__NEW__' + os.path.basename(sound_file)
+    if sound_file:
+        fade_command = list(FADE)
+        fade_command[1] = sound_file
+        fade_command[2] = tmp_file
+        process = subprocess.Popen(fade_command)
+        process.wait()
+        os.rename(tmp_file, sound_file)
+        message = 'Faded ' + sound_name
+    else:
+        message = 'No sound matching ' + sound_name
+    return message
+
+
+def slugify(raw):
+    return "".join([x for x in raw if x in VALID_CHARS]).replace("-", "_").strip().replace(" ", "_").lower()
+
+
+def download_action(match, user, config):
+    url = match.group(1)
+    filename = match.group(2)
+    folder = 'misc'
+    for sep in FOLDER_SEP:
+        if sep in filename:
+            folder, filename = filename.split(sep)
+            break
+    if filename.endswith('.mp3'):
+        filename = filename[:-4]
+    filename = slugify(filename)
+
+    dl_command = list(YOUTUBE_DOWNLOAD)
+    dl_command[-1] = dl_command[-1].format(filename)
+    dl_command[-3] = url
+    process = subprocess.Popen(dl_command)
+    process.wait()
+
+    path_to_sound = os.path.join(SOUNDS_DIR, slugify(folder), filename + '.mp3')
+    try:
+        os.makedirs(os.path.join(SOUNDS_DIR, slugify(folder)))
+    except OSError:
+        pass
+    os.rename(filename + '.mp3', path_to_sound)
+    subprocess.Popen(EQUALIZER + [path_to_sound])
+    return "Sound added correctly"
+
+
+def add_sound(sc, file_id, config):
     info = sc.api_call("files.info", file=file_id)
     file_url = info.get("file").get("url_private") if info["ok"] else ''
     filename = info.get("file").get("title") if info["ok"] else ''
     if filename.endswith('.mp3') and file_url.endswith('.mp3'):
         folder = 'misc'
-        if ':' in filename:
-            folder, filename = filename.split(':')
+        for sep in FOLDER_SEP:
+            if sep in filename:
+                folder, filename = filename.split(sep)
+                break
         try:
-            os.makedirs(os.path.join(SOUNDS_DIR, folder.strip()))
+            os.makedirs(os.path.join(SOUNDS_DIR, slugify(folder)))
         except OSError:
             pass
         req = urllib2.Request(file_url, headers={"Authorization": "Bearer " + config["_token"]})
-        with open(os.path.join(SOUNDS_DIR, folder.strip(), filename.strip()), 'w+') as f:
+        path_to_sound = os.path.join(SOUNDS_DIR, slugify(folder), slugify(filename))
+        with open(path_to_sound, 'w+') as f:
             f.write(urllib2.urlopen(req).read())
+        subprocess.Popen(EQUALIZER + [path_to_sound])
 
 
-def load_users():
+ACTIONS = {
+    PLAY_REGEX: play_action,
+    REMOVE_REGEX: remove_action,
+    UPDATE_CONF_REGEX: update_conf_action,
+    SHOW_CONF_REGEX: show_conf_action,
+    PUNISH_USER_REGEX: punish_user_action,
+    HELP_REGEX: show_help_action,
+    LIST_SOUNDS_REGEX: list_sounds_action,
+    SHOW_LOGS_REGEX: show_logs_action,
+    YOUTUBE_REGEX: download_action,
+    PAD_REGEX: pad_action,
+    TRIM_REGEX: trim_action,
+    FADE_OUT_REGEX: fade_out_action,
+}
+
+
+def load_users(sc):
     user_list = sc.api_call("users.list")
-    users = {}
     for user in user_list["members"]:
         users[user["id"]] = {
             "name": user["name"],
             "is_admin": user.get("is_admin", False),
             "id": user["id"]
         }
-    return users
 
 
-if __name__ == '__main__':
-    throttling_record = {}
+def start():
     config = load_config()
     sc = SlackClient(config["_token"])
     if sc.rtm_connect():
         bot_id = sc.api_call("auth.test")["user_id"]
-        users = load_users()
+        load_users(sc)
         while True:
             for event in sc.rtm_read():
                 event_type = event.get('type', None)
-
+                print event_type, event.get('text')
                 if event_type == 'message':
-                    text = event.get('text', '')
+                    text = event.get('text', '').replace(u'’', "'")
                     user = users.get(event.get('user', None), None)
                     channel = event.get('channel', None)
                     if not user or not text or not channel:
@@ -218,7 +396,16 @@ if __name__ == '__main__':
                 elif event_type == 'file_created' or event_type == 'file_shared':
                     file_id = event.get('file', {}).get('id', None)
                     if file_id:
-                        add_sound(file_id, config)
+                        add_sound(sc, file_id, config)
             time.sleep(1);
     else:
         print 'Connection failed, invalid token?'
+
+
+if __name__ == '__main__':
+    while True:
+        try:
+            start()
+        except Exception as e:
+            traceback.print_exc()
+        time.sleep(30)
