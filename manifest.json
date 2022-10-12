@@ -1,0 +1,52 @@
+{
+    "display_information": {
+        "name": "sounds",
+        "description": "Playing sounds on Paris 1st floor TV",
+        "background_color": "#b56700",
+        "long_description": "Welcome to sounds, the bot that brings fun to your team.\r\nTo interact with the bot, simply use these commands:\r\n    list sounds: shows the full list of all the sounds available\r\n    play replace_with_sound: plays the sound you chose from the list\r\n    show logs: shows a list who played the last 10 sounds\r\n    pad replace_with_sound: adds 0.5s at the beginning of the sound\r\n    trim replace_with_sound 2.5 10: trim the selected sound to be only between 2.5 and 10 seconds\r\n    fade replace_with_sound: adds a 1s fadeout on your sound\r\n    download replace_with_youtube_url replace_with_sound: downloads a sound from youtube\r\n    help: shows this help\r\n\r\nIn the bot channel, upload your mp3 file. This file should already be cut properly and have 0.5s of silence at the beginning.\r\nYou can use various websites to convert a youtube video to an mp3 file and then use a software like audacity or a website like audiotrimmer.com to edit it.\r\nBe sure you filename ends with .mp3 and if you want to put your file in a specific folder separate the folder from the filename like so folder:filename.mp3\r\n\r\nThat's it with the instructions, have fun !"
+    },
+    "features": {
+        "bot_user": {
+            "display_name": "sounds",
+            "always_online": false
+        }
+    },
+    "oauth_config": {
+        "scopes": {
+            "bot": [
+                "files:read",
+                "channels:history",
+                "channels:read",
+                "channels:join",
+                "chat:write",
+                "chat:write.customize",
+                "commands",
+                "app_mentions:read",
+                "links:read",
+                "files:write",
+                "users:read.email",
+                "users:read",
+                "incoming-webhook",
+                "remote_files:read",
+                "remote_files:write",
+                "remote_files:share"
+            ]
+        }
+    },
+    "settings": {
+        "event_subscriptions": {
+            "bot_events": [
+                "file_created",
+                "file_shared",
+                "message.channels",
+                "message.im"
+            ]
+        },
+        "interactivity": {
+            "is_enabled": true
+        },
+        "org_deploy_enabled": false,
+        "socket_mode_enabled": true,
+        "token_rotation_enabled": false
+    }
+}

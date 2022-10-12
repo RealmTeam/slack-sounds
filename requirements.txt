@@ -1,1 +1,1 @@
-slackclient==1.2.1
+slack_bolt==1.15.1

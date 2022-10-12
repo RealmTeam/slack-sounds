@@ -9,9 +9,11 @@ from distutils.util import strtobool
 import os
 import re
 import json
-import urllib2
+import urllib.request, urllib.error, urllib.parse
 
-from slackclient import SlackClient
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
+
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 SOUNDS_DIR = os.path.join(BASE_DIR, 'sounds')
@@ -35,8 +37,8 @@ DEFAULT_OPTIONS = {
     "default_ban_length": 30,
 }
 
-PLAY_REGEX = re.compile(u"play\s([a-z0-9_' ]+)", re.IGNORECASE)
-REMOVE_REGEX = re.compile(u"remove\s([a-z0-9_' ]+)", re.IGNORECASE)
+PLAY_REGEX = re.compile("play\s([a-z0-9_' ]+)", re.IGNORECASE)
+REMOVE_REGEX = re.compile("remove\s([a-z0-9_' ]+)", re.IGNORECASE)
 UPDATE_CONF_REGEX = re.compile("^set\s([A-Z0-9_]+)\sto\s([A-Z0-9_]+)$", re.IGNORECASE)
 SHOW_CONF_REGEX = re.compile("^show\sconf$", re.IGNORECASE)
 LIST_SOUNDS_REGEX = re.compile("list\ssounds", re.IGNORECASE)
@@ -53,14 +55,12 @@ users = {}
 throttling_record = {}
 punished = {}
 logs = []
-
-def load_config():
-    config = {}
-    with open(CONFIG_FILE, 'r') as f:
-        config = json.loads(f.read())
-    for key, value in DEFAULT_OPTIONS.iteritems():
-        config.setdefault(key, value)
-    return config
+config = {}
+with open(CONFIG_FILE, 'r') as f:
+    config = json.loads(f.read())
+for key, value in DEFAULT_OPTIONS.items():
+    config.setdefault(key, value)
+app = App(token=config["oauth_token"])
 
 
 def write_config(config):
@@ -147,7 +147,7 @@ def list_sounds_action(match, user, config):
 
     def split_by_cols(l, n=4):
         output = ''
-        for row in (l[i:i + n] for i in xrange(0, len(l), n)):
+        for row in (l[i:i + n] for i in range(0, len(l), n)):
             fmt = "| {:<30s} " * len(row)
             output += fmt.format(*row) + '\n'
         return output
@@ -165,7 +165,7 @@ def show_conf_action(match, user, config):
     if not user["is_admin"]:
         return
     message = ''
-    for key, value in config.iteritems():
+    for key, value in config.items():
         message += '{}: {}\n'.format(key, value)
     return message
 
@@ -320,7 +320,7 @@ def download_action(match, user, config):
 
 
 def add_sound(sc, file_id, config):
-    info = sc.api_call("files.info", file=file_id)
+    info = sc.files_info(file=file_id)
     file_url = info.get("file").get("url_private") if info["ok"] else ''
     filename = info.get("file").get("title") if info["ok"] else ''
     if filename.endswith('.mp3') and file_url.endswith('.mp3'):
@@ -333,10 +333,10 @@ def add_sound(sc, file_id, config):
             os.makedirs(os.path.join(SOUNDS_DIR, slugify(folder)))
         except OSError:
             pass
-        req = urllib2.Request(file_url, headers={"Authorization": "Bearer " + config["_token"]})
+        req = urllib.request.Request(file_url, headers={"Authorization": "Bearer " + config["_token"]})
         path_to_sound = os.path.join(SOUNDS_DIR, slugify(folder), slugify(filename))
         with open(path_to_sound, 'w+') as f:
-            f.write(urllib2.urlopen(req).read())
+            f.write(urllib.request.urlopen(req).read())
         subprocess.Popen(EQUALIZER + [path_to_sound])
 
 
@@ -357,49 +357,54 @@ ACTIONS = {
 
 
 def load_users(sc):
-    user_list = sc.api_call("users.list")
-    for user in user_list["members"]:
+    user_list = []
+
+    def paginated_api_call(cursor=None):
+        response = sc.users_list(cursor=cursor)
+        user_list.extend(response.get("members", []))
+        if response.get("response_metadata", {}).get("next_cursor"):
+            paginated_api_call(response["response_metadata"]["next_cursor"])
+
+    paginated_api_call()
+    for user in user_list:
         users[user["id"]] = {
             "name": user["name"],
             "is_admin": user.get("is_admin", False),
             "id": user["id"]
         }
 
+@app.event("file_created")
+@app.event("file_shared")
+def file_uploaded(event, **kwargs):
+    file_id = event.get('file', {}).get('id', None)
+    if file_id:
+        add_sound(app._client, file_id, config)
+
+
+@app.event("message")
+def message_received(event, **kwargs):
+    text = event.get('text', '').replace('’', "'")
+    user = users.get(event.get('user', None), None)
+    channel = event.get('channel', None)
+    if not user or not text or not channel:
+        return
+
+    message = None
+    for regex, action in ACTIONS.items():
+        match = regex.match(text)
+        if match:
+            message = action(match, user, config)
+            if message:
+                app._client.chat_postEphemeral(channel=channel, text=message, user=user["id"])
+            break
+
 
 def start():
-    config = load_config()
-    sc = SlackClient(config["_token"])
-    if sc.rtm_connect():
-        bot_id = sc.api_call("auth.test")["user_id"]
-        load_users(sc)
-        while True:
-            for event in sc.rtm_read():
-                event_type = event.get('type', None)
-                print event_type, event.get('text')
-                if event_type == 'message':
-                    text = event.get('text', '').replace(u'’', "'")
-                    user = users.get(event.get('user', None), None)
-                    channel = event.get('channel', None)
-                    if not user or not text or not channel:
-                        continue
+    handler = SocketModeHandler(app, config["app_token"])
+    load_users(app._client)
+    bot_id = app._client.auth_test()["user_id"]
+    handler.start()
 
-                    message = None
-                    for regex, action in ACTIONS.iteritems():
-                        match = regex.match(text)
-                        if match:
-                            message = action(match, user, config)
-                            break
-
-                    if message:
-                        sc.api_call("chat.postEphemeral", channel=channel, text=message, user=user["id"])
-
-                elif event_type == 'file_created' or event_type == 'file_shared':
-                    file_id = event.get('file', {}).get('id', None)
-                    if file_id:
-                        add_sound(sc, file_id, config)
-            time.sleep(1);
-    else:
-        print 'Connection failed, invalid token?'
 
 
 if __name__ == '__main__':
