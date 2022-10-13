@@ -237,8 +237,8 @@ def punish_user_action(match, user, config):
 def trim_action(match, user, config):
     sound_name = match.group(1).strip()
     sound_file = find_sound(sound_name)
-    tmp_file = '__NEW__' + os.path.basename(sound_file)
     if sound_file:
+        tmp_file = '__NEW__' + os.path.basename(sound_file)
         trim_command = list(TRIM)
         trim_command[1] = sound_file
         trim_command[2] = tmp_file
@@ -256,8 +256,8 @@ def trim_action(match, user, config):
 def pad_action(match, user, config):
     sound_name = match.group(1).strip()
     sound_file = find_sound(sound_name)
-    tmp_file = '__NEW__' + os.path.basename(sound_file)
     if sound_file:
+        tmp_file = '__NEW__' + os.path.basename(sound_file)
         pad_command = list(PAD_SILENCE)
         pad_command[1] = sound_file
         pad_command[2] = tmp_file
@@ -273,8 +273,8 @@ def pad_action(match, user, config):
 def fade_out_action(match, user, config):
     sound_name = match.group(1).strip()
     sound_file = find_sound(sound_name)
-    tmp_file = '__NEW__' + os.path.basename(sound_file)
     if sound_file:
+        tmp_file = '__NEW__' + os.path.basename(sound_file)
         fade_command = list(FADE)
         fade_command[1] = sound_file
         fade_command[2] = tmp_file
@@ -369,7 +369,7 @@ def load_users(sc):
     for user in user_list:
         users[user["id"]] = {
             "name": user["name"],
-            "is_admin": user.get("is_admin", False),
+            "is_admin": user.get("is_admin", False) or user["id"] in config.get("admins", []),
             "id": user["id"]
         }
 
